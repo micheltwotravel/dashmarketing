@@ -2,6 +2,9 @@ from fastapi import FastAPI, Query
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Dimension, Metric
 from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+import requests
 import json
 
 app = FastAPI()
@@ -63,3 +66,54 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
     
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/ads")
+def obtener_datos_ads():
+    try:
+        # Cargar el token generado
+        with open("google_ads_token.json", "r") as f:
+            token_data = json.load(f)
+
+        credentials = Credentials.from_authorized_user_info(token_data)
+
+        # Refrescar token si es necesario
+        if credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+
+        # Guardar el token refrescado
+        with open("google_ads_token.json", "w") as f:
+            f.write(credentials.to_json())
+
+        access_token = credentials.token
+
+        # Aquí haces la consulta al API de Google Ads (CAMBIA TU CUSTOMER_ID REAL)
+        customer_id = "INSERTA_AQUÍ_TU_CUSTOMER_ID"
+        url = f"https://googleads.googleapis.com/v14/customers/{customer_id}/googleAds:search"
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "developer-token": "INSERTA_AQUÍ_TU_DEV_TOKEN",
+            "Content-Type": "application/json"
+        }
+
+        body = {
+            "query": """
+                SELECT
+                  campaign.id,
+                  campaign.name,
+                  metrics.clicks,
+                  metrics.impressions,
+                  metrics.average_cpc,
+                  metrics.cost_micros
+                FROM campaign
+                WHERE segments.date DURING LAST_30_DAYS
+                LIMIT 20
+            """
+        }
+
+        response = requests.post(url, headers=headers, json=body)
+        return response.json()
+
+    except Exception as e:
+        return {"error": str(e)}
+
