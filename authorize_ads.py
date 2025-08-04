@@ -1,7 +1,7 @@
 from google_auth_oauthlib.flow import InstalledAppFlow
 import json
 
-# Carga tu archivo de OAuth descargado
+# Carga tu archivo de OAuth
 with open("client_secret.json") as f:
     secrets = json.load(f)["web"]
 
@@ -13,10 +13,10 @@ flow = InstalledAppFlow.from_client_config(
     scopes=scopes
 )
 
-# Abre navegador para login
-credentials = flow.run_local_server(port=8080)
+# MOSTRARÁ UNA URL EN CONSOLA para que la copies y pegues
+credentials = flow.run_console()
 
-# Guarda el token (lo necesitarás para hacer peticiones)
+# Guarda el token generado
 with open("google_ads_token.json", "w") as token_file:
     token_file.write(credentials.to_json())
 
