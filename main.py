@@ -87,7 +87,7 @@ def obtener_datos_ads():
         access_token = credentials.token
 
         # Aquí haces la consulta al API de Google Ads (CAMBIA TU CUSTOMER_ID REAL)
-        customer_id = "INSERTA_AQUÍ_TU_CUSTOMER_ID"
+        customer_id = "788685392081-lscsja3am8iqtrbvofd6e5lcucgml2lh.apps.googleusercontent.com"
         url = f"https://googleads.googleapis.com/v14/customers/{customer_id}/googleAds:search"
 
         headers = {
