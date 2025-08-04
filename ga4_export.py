@@ -7,7 +7,7 @@ import pandas as pd
 app = FastAPI()
 
 PROPERTY_ID = "279889272"
-KEY_PATH = "credentials.json"
+KEY_PATH = "/etc/secrets/ga4-credentials.json"  # usaremos secret file en Render
 
 @app.get("/exportar")
 def exportar_datos(start: str = Query(...), end: str = Query(...)):
@@ -30,16 +30,14 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
     )
 
     response = client.run_report(request)
-    rows = [{
-        "date": row.dimension_values[0].value,
-        "country": row.dimension_values[1].value,
-        "pagePath": row.dimension_values[2].value,
-        "users": int(row.metric_values[0].value),
-        "sessions": int(row.metric_values[1].value),
-        "pageviews": int(row.metric_values[2].value)
-    } for row in response.rows]
 
-    df = pd.DataFrame(rows)
-    output_file = f"export_{start}_to_{end}.csv"
-    df.to_csv(output_file, index=False)
-    return {"status": "success", "file": output_file}
+    rows = [{
+        "date": r.dimension_values[0].value,
+        "country": r.dimension_values[1].value,
+        "pagePath": r.dimension_values[2].value,
+        "users": int(r.metric_values[0].value),
+        "sessions": int(r.metric_values[1].value),
+        "pageviews": int(r.metric_values[2].value)
+    } for r in response.rows]
+
+    return {"rows": rows}
