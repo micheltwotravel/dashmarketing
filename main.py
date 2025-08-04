@@ -3,15 +3,18 @@ from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Dimension, Metric
 from google.oauth2 import service_account
 import pandas as pd
+import os
+import json
 
 app = FastAPI()
 
 PROPERTY_ID = "279889272"
-KEY_PATH = "/etc/secrets/ga4-credentials.json"  # usaremos secret file en Render
 
 @app.get("/exportar")
 def exportar_datos(start: str = Query(...), end: str = Query(...)):
-    credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+    # ✅ Leer la credencial del Secret
+    credentials_info = json.loads(os.getenv("GA4_CREDENTIALS_JSON"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_info)
     client = BetaAnalyticsDataClient(credentials=credentials)
 
     request = RunReportRequest(
