@@ -9,11 +9,14 @@ import json
 app = FastAPI()
 
 PROPERTY_ID = "279889272"
+CREDENTIALS_FILE = "/etc/secrets/ga4-credentials.json"  # Secret File montado por Render
 
 @app.get("/exportar")
 def exportar_datos(start: str = Query(...), end: str = Query(...)):
-    # ✅ Leer la credencial del Secret
-    credentials_info = json.loads(os.getenv("GA4_CREDENTIALS_JSON"))
+    # ✅ Leer contenido del secret file como dict
+    with open(CREDENTIALS_FILE, "r") as f:
+        credentials_info = json.load(f)
+
     credentials = service_account.Credentials.from_service_account_info(credentials_info)
     client = BetaAnalyticsDataClient(credentials=credentials)
 
