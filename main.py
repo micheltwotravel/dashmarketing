@@ -186,3 +186,21 @@ def test_google_ads_client():
         print(f"Error loading Google Ads client: {e}")
 
 test_google_ads_client()  # Prueba la carga del cliente
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+
+def get_valid_credentials():
+    credentials = Credentials.from_authorized_user_file('/path/to/google-ads.yaml')
+
+    if credentials and credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())  # Renovar el token
+        print("Nuevo access token:", credentials.token)
+        return credentials
+
+    elif credentials and not credentials.expired:
+        print("Token aún válido.")
+        return credentials
+    else:
+        print("No se pudo obtener el token.")
+        return None
