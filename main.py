@@ -108,7 +108,6 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
 
-        # La consulta a Google Ads debe estar correctamente configurada
         query = f"""
           SELECT
             segments.date,
@@ -124,20 +123,21 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         """
 
         rows = []
-        response = ga_service.search(customer_id=cid, query=query)  # Asegúrate de usar `search` aquí
-        
-        # Procesar los resultados
-        for row in response:
-            rows.append({
-                "date": row.segments.date,
-                "campaign_id": row.campaign.id,
-                "campaign_name": row.campaign.name,
-                "impressions": row.metrics.impressions,
-                "clicks": row.metrics.clicks,
-                "conversions": row.metrics.conversions,
-                "cost": float(row.metrics.cost_micros) / 1_000_000.0,
-            })
-        
+        # Usar search_stream en lugar de search
+        response = ga_service.search_stream(customer_id=cid, query=query)
+
+        for batch in response:
+            for row in batch.results:
+                rows.append({
+                    "date": row.segments.date,
+                    "campaign_id": row.campaign.id,
+                    "campaign_name": row.campaign.name,
+                    "impressions": row.metrics.impressions,
+                    "clicks": row.metrics.clicks,
+                    "conversions": row.metrics.conversions,
+                    "cost": float(row.metrics.cost_micros) / 1_000_000.0,
+                })
+
         return {"ok": True, "rows": rows}
 
     except GoogleAdsException as ex:
