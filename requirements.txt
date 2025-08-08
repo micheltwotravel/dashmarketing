@@ -4,4 +4,4 @@ pandas
 google-analytics-data==0.18.0
 google-auth==2.27.0
 google-auth-oauthlib
-google-ads==24.0.0
+google-ads==18.2.0
