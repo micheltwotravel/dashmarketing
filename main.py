@@ -70,61 +70,66 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
     except Exception as e:
         return {"error": str(e)}
 
+# --- Google Ads con SDK oficial (lee /etc/secrets/google-ads.yaml) ---
+from google.ads.googleads.client import GoogleAdsClient
+import datetime as dt
+from fastapi import Query, HTTPException
+
+def _valid_date(s: str) -> dt.date:
+    return dt.datetime.strptime(s, "%Y-%m-%d").date()
+
+def _ads_client() -> GoogleAdsClient:
+    return GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+
 @app.get("/ads")
-def obtener_datos_ads():
+def ads_report(
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end:   str = Query(..., description="YYYY-MM-DD"),
+):
     try:
-        # Cargar el token generado
-        with open("google_ads_token.json", "r") as f:
-            token_data = json.load(f)
+        sd, ed = _valid_date(start), _valid_date(end)
+        if sd > ed:
+            raise ValueError
+    except Exception:
+        raise HTTPException(400, "Fechas inválidas. Usa YYYY-MM-DD y start<=end.")
 
-        credentials = Credentials.from_authorized_user_info(token_data)
+    client = _ads_client()
+    ga_service = client.get_service("GoogleAdsService")
+    cid = client.configuration.client_customer_id.replace("-", "")
 
-        # Refrescar token si es necesario
-        if credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
+    query = f"""
+      SELECT
+        segments.date,
+        campaign.id,
+        campaign.name,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.conversions,
+        metrics.cost_micros
+      FROM campaign
+      WHERE segments.date BETWEEN '{sd}' AND '{ed}'
+      ORDER BY segments.date, campaign.id
+    """
 
-        # Guardar el token refrescado
-        with open("google_ads_token.json", "w") as f:
-            f.write(credentials.to_json())
-
-        access_token = credentials.token
-
-        # Aquí haces la consulta al API de Google Ads (CAMBIA TU CUSTOMER_ID REAL)
-        customer_id = "788685392081-lscsja3am8iqtrbvofd6e5lcucgml2lh.apps.googleusercontent.com"
-        url = f"https://googleads.googleapis.com/v14/customers/{customer_id}/googleAds:search"
-
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": "bAkDdDbdaAGfhkMETHmHEA",
-            "Content-Type": "application/json"
-        }
-
-        body = {
-            "query": """
-                SELECT
-                  campaign.id,
-                  campaign.name,
-                  metrics.clicks,
-                  metrics.impressions,
-                  metrics.average_cpc,
-                  metrics.cost_micros
-                FROM campaign
-                WHERE segments.date DURING LAST_30_DAYS
-                LIMIT 20
-            """
-        }
-
-        response = requests.post(url, headers=headers, json=body)
-        return response.json()
-
-    except Exception as e:
-        return {"error": str(e)}
-SCOPES = ["https://www.googleapis.com/auth/adwords"]
+    rows = []
+    for r in ga_service.search(customer_id=cid, query=query):
+        rows.append({
+            "date": r.segments.date,
+            "campaign_id": r.campaign.id,
+            "campaign_name": r.campaign.name,
+            "impressions": r.metrics.impressions,
+            "clicks": r.metrics.clicks,
+            "conversions": r.metrics.conversions,
+            "cost": r.metrics.cost_micros / 1_000_000.0,
+        })
+    return {"rows": rows}
 
 def build_flow(state: str | None = None):
     client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
     client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
     redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+    SCOPES = ["https://www.googleapis.com/auth/adwords"]
+
     cfg = {
         "web": {
             "client_id": client_id,
