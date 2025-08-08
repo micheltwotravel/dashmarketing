@@ -123,7 +123,7 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         """
 
         rows = []
-        # Usar search_stream en lugar de search
+        # Asegúrate de usar search_stream
         response = ga_service.search_stream(customer_id=cid, query=query)
 
         for batch in response:
