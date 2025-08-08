@@ -208,3 +208,9 @@ def ads_health():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+@app.get("/ads/ping")
+def ads_ping():
+    client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+    svc = client.get_service("CustomerService")
+    res = svc.list_accessible_customers()
+    return {"resource_names": list(res.resource_names)}
