@@ -9,6 +9,9 @@ import json
 import os
 from fastapi import FastAPI, HTTPException, Request
 from google_auth_oauthlib.flow import Flow
+import yaml
+from google.ads.googleads.errors import GoogleAdsException
+
 
 app = FastAPI()
 
@@ -81,11 +84,26 @@ def _valid_date(s: str) -> dt.date:
 def _ads_client() -> GoogleAdsClient:
     return GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
 
+def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
+    # Lee client_customer_id (o login_customer_id) desde el YAML de Render
+    with open(path, "r") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    cid = str(
+        cfg.get("client_customer_id")
+        or cfg.get("login_customer_id")
+        or ""
+    ).strip()
+    if not cid:
+        # Error legible si falta el ID en el yaml
+        raise HTTPException(400, "No se encontró client_customer_id/login_customer_id en google-ads.yaml")
+    return cid.replace("-", "")
+
 @app.get("/ads")
 def ads_report(
     start: str = Query(..., description="YYYY-MM-DD"),
     end:   str = Query(..., description="YYYY-MM-DD"),
 ):
+    # Validación de fechas
     try:
         sd, ed = _valid_date(start), _valid_date(end)
         if sd > ed:
@@ -93,10 +111,12 @@ def ads_report(
     except Exception:
         raise HTTPException(400, "Fechas inválidas. Usa YYYY-MM-DD y start<=end.")
 
+    # Cliente + servicio + customer id (desde /etc/secrets/google-ads.yaml)
     client = _ads_client()
     ga_service = client.get_service("GoogleAdsService")
-    cid = client.configuration.client_customer_id.replace("-", "")
+    cid = _customer_id_from_yaml()
 
+    # GAQL
     query = f"""
       SELECT
         segments.date,
@@ -111,18 +131,27 @@ def ads_report(
       ORDER BY segments.date, campaign.id
     """
 
-    rows = []
-    for r in ga_service.search(customer_id=cid, query=query):
-        rows.append({
-            "date": r.segments.date,
-            "campaign_id": r.campaign.id,
-            "campaign_name": r.campaign.name,
-            "impressions": r.metrics.impressions,
-            "clicks": r.metrics.clicks,
-            "conversions": r.metrics.conversions,
-            "cost": r.metrics.cost_micros / 1_000_000.0,
-        })
-    return {"rows": rows}
+    # Ejecución y manejo de errores
+    try:
+        rows = []
+        for r in ga_service.search(customer_id=cid, query=query):
+            rows.append({
+                "date": r.segments.date,
+                "campaign_id": r.campaign.id,
+                "campaign_name": r.campaign.name,
+                "impressions": r.metrics.impressions,
+                "clicks": r.metrics.clicks,
+                "conversions": r.metrics.conversions,
+                "cost": float(r.metrics.cost_micros) / 1_000_000.0,
+            })
+        return {"rows": rows}
+    except GoogleAdsException as ex:
+        details = [
+            {"code": e.error_code.__class__.__name__, "message": e.message}
+            for e in ex.failure.errors
+        ]
+        raise HTTPException(400, {"request_id": ex.request_id, "errors": details})
+
 
 def build_flow(state: str | None = None):
     client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
