@@ -111,35 +111,25 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = client.login_customer_id  # Obtener el client_customer_id desde las credenciales
 
-        # Consulta para obtener métricas de campañas
+        # Consulta simplificada para obtener solo el ID y el nombre de las campañas
         query = f"""
         SELECT
-            segments.date,
             campaign.id,
-            campaign.name,
-            metrics.impressions,
-            metrics.clicks,
-            metrics.conversions,
-            metrics.cost_micros
+            campaign.name
         FROM campaign
         WHERE segments.date BETWEEN '{start}' AND '{end}'
-        ORDER BY segments.date, campaign.id
+        ORDER BY campaign.id
         """
 
         rows = []
-        # Usar `search_stream` para obtener grandes volúmenes de datos
+        # Usar `search_stream` para obtener los resultados
         response = ga_service.search_stream(customer_id=cid, query=query)
 
         for batch in response:
             for row in batch.results:
                 rows.append({
-                    "date": row.segments.date,
                     "campaign_id": row.campaign.id,
                     "campaign_name": row.campaign.name,
-                    "impressions": row.metrics.impressions,
-                    "clicks": row.metrics.clicks,
-                    "conversions": row.metrics.conversions,
-                    "cost": float(row.metrics.cost_micros) / 1_000_000.0,
                 })
 
         return {"ok": True, "rows": rows}
@@ -157,7 +147,6 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
     except Exception as e:
         return {"ok": False, "type": type(e).__name__, "message": str(e)}, 500
 
-# Endpoint para verificar la conexión con Google Ads
 @app.get("/ads/ping")
 def ads_ping():
     try:
