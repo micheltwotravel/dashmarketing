@@ -185,7 +185,7 @@ from google.oauth2.credentials import Credentials
 
 def verify_refresh_token():
     try:
-        credentials = Credentials.from_authorized_user_file('path_to_google-ads.yaml')
+        credentials = Credentials.from_authorized_user_file('/etc/secrets/google-ads.yaml')
         
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
