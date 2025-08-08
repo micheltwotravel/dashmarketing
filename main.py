@@ -78,11 +78,15 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
     
     except Exception as e:
         return {"error": str(e)}
+
+
+
+# Ruta para cargar el cliente de Google Ads
 def _ads_client() -> GoogleAdsClient:
     return GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
 
-# Función para verificar que las credenciales de Google Ads funcionan correctamente
-@app.get("/ads/health", response_model=None)
+# Función para verificar las credenciales de Google Ads
+@app.get("/ads/health")
 def ads_health():
     try:
         # Intentar cargar el cliente de Google Ads
@@ -100,7 +104,7 @@ def ads_health():
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 # Endpoint para consultar campañas y métricas en un rango de fechas
-@app.get("/ads", response_model=None)
+@app.get("/ads")
 def ads_report(start: str = Query(...), end: str = Query(...)):
     try:
         client = _ads_client()
@@ -130,21 +134,11 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
 
         return JSONResponse(content={"ok": True, "rows": rows})
 
-    except GoogleAdsException as ex:
-        return JSONResponse(content={
-            "ok": False,
-            "type": "GoogleAdsException",
-            "request_id": ex.request_id,
-            "errors": [
-                {"code": e.error_code.__class__.__name__, "message": e.message}
-                for e in ex.failure.errors
-            ],
-        }, status_code=400)
     except Exception as e:
-        return JSONResponse(content={"ok": False, "type": type(e).__name__, "message": str(e)}, status_code=500)
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
 # Endpoint para hacer ping y verificar la conexión con el servicio de Google Ads
-@app.get("/ads/ping", response_model=None)
+@app.get("/ads/ping")
 def ads_ping():
     try:
         # Intentar cargar el cliente de Google Ads
@@ -152,41 +146,15 @@ def ads_ping():
         svc = client.get_service("CustomerService")
         res = svc.list_accessible_customers()  # Listar clientes accesibles
         return JSONResponse(content={"ok": True, "resource_names": list(res.resource_names)})
-    except GoogleAdsException as ex:
-        return JSONResponse(content={
-            "ok": False,
-            "type": "GoogleAdsException",
-            "request_id": ex.request_id,
-            "errors": [
-                {"code": e.error_code.__class__.__name__, "message": e.message}
-                for e in ex.failure.errors
-            ],
-        }, status_code=400)
     except Exception as e:
-        return JSONResponse(content={
-            "ok": False,
-            "type": type(e).__name__,
-            "message": str(e),
-            "trace": traceback.format_exc(),
-        }, status_code=500)
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
-# Función de prueba para verificar que Google Ads Client se carga correctamente
-def test_google_ads_client():
-    try:
-        client = _ads_client()
-        print("Google Ads client loaded successfully")
-    except Exception as e:
-        print(f"Error loading Google Ads client: {e}")
-
-test_google_ads_client()  # Prueba la carga del cliente
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-
+# Función para verificar el refresh_token y renovarlo si es necesario
 def verify_refresh_token():
     try:
         credentials = Credentials.from_authorized_user_file('/etc/secrets/google-ads.yaml')
         
+        # Verificar si el access_token está caducado
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
             print("Acceso autorizado con nuevo access_token")
@@ -200,8 +168,21 @@ def verify_refresh_token():
         print(f"Error al verificar las credenciales: {e}")
         return None
 
-token = verify_refresh_token()
-if token:
-    print("Token de acceso válido:", token)
-else:
-    print("Las credenciales no son válidas.")
+# Verificar el refresh_token
+@app.get("/ads/verify_token")
+def verify_token():
+    token = verify_refresh_token()
+    if token:
+        return JSONResponse(content={"ok": True, "token": token})
+    else:
+        return JSONResponse(content={"ok": False, "message": "Las credenciales no son válidas."})
+
+# Verificación de Google Ads Client al iniciar
+def test_google_ads_client():
+    try:
+        client = _ads_client()
+        print("Google Ads client loaded successfully")
+    except Exception as e:
+        print(f"Error loading Google Ads client: {e}")
+
+test_google_ads_client()  # Prueba la carga del cliente
