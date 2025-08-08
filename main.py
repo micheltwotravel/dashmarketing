@@ -197,7 +197,7 @@ def ads_health():
         client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
         
         ga_service = client.get_service("GoogleAdsService")
-        customer_id = "YOUR_CLIENT_CUSTOMER_ID"
+        customer_id = client.login_customer_id
         
         # Simple query to check if campaigns can be retrieved
         query = """
