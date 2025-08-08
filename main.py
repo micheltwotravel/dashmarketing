@@ -194,10 +194,32 @@ def callback_ads(request: Request, code: str, state: str | None = None):
 def ads_health():
     try:
         from google.ads.googleads.client import GoogleAdsClient
-        c = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
-        return {"ok": True}
+        client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+        
+        ga_service = client.get_service("GoogleAdsService")
+        customer_id = "YOUR_CLIENT_CUSTOMER_ID"
+        
+        # Simple query to check if campaigns can be retrieved
+        query = """
+        SELECT campaign.id, campaign.name
+        FROM campaign
+        LIMIT 10
+        """
+        
+        response = ga_service.search(customer_id=customer_id, query=query)
+        campaigns = []
+        
+        for row in response:
+            campaigns.append({
+                "campaign_id": row.campaign.id,
+                "campaign_name": row.campaign.name,
+            })
+        
+        return {"ok": True, "campaigns": campaigns}
+    
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 @app.get("/ads/ping")
@@ -224,3 +246,14 @@ def ads_ping():
             "message": str(e),
             "trace": traceback.format_exc(),
         }, 500
+
+from google.ads.googleads.client import GoogleAdsClient
+
+def test_google_ads_client():
+    try:
+        client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+        print("Google Ads client loaded successfully")
+    except Exception as e:
+        print(f"Error loading Google Ads client: {e}")
+
+test_google_ads_client()
