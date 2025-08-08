@@ -111,26 +111,26 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = client.login_customer_id  # Obtener el client_customer_id desde las credenciales
 
-        # Consulta simplificada para obtener solo el ID y el nombre de las campañas
+        # Consulta simplificada, solo para obtener ID y nombre de las campañas
         query = f"""
         SELECT
             campaign.id,
             campaign.name
         FROM campaign
         WHERE segments.date BETWEEN '{start}' AND '{end}'
+        LIMIT 10  # Solo las primeras 10 campañas
         ORDER BY campaign.id
         """
 
         rows = []
-        # Usar `search_stream` para obtener los resultados
-        response = ga_service.search_stream(customer_id=cid, query=query)
+        # Usar `search` en lugar de `search_stream`
+        response = ga_service.search(customer_id=cid, query=query)  # Cambié search_stream por search
 
-        for batch in response:
-            for row in batch.results:
-                rows.append({
-                    "campaign_id": row.campaign.id,
-                    "campaign_name": row.campaign.name,
-                })
+        for row in response:
+            rows.append({
+                "campaign_id": row.campaign.id,
+                "campaign_name": row.campaign.name,
+            })
 
         return {"ok": True, "rows": rows}
 
