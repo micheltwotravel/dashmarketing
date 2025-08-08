@@ -7,3 +7,5 @@ google-auth-oauthlib
 google-ads==22.0.0
 pydantic==2.11.7  # Asegúrate de tener la versión correcta de Pydantic
 grpcio==1.74.0  # Esto es necesario para las conexiones de gRPC, como Google Ads API
+google-api-core==2.25.1  # Para Google API en general
+protobuf==4.25.8  # Para la serialización de mensajes, necesaria para gRPC
