@@ -177,7 +177,6 @@ def verify_token():
         return JSONResponse(content={"ok": True, "token": token})
     else:
         return JSONResponse(content={"ok": False, "message": "Las credenciales no son válidas."})
-
 # Verificación de Google Ads Client al iniciar
 def test_google_ads_client():
     try:
@@ -188,10 +187,32 @@ def test_google_ads_client():
 
 test_google_ads_client()  # Prueba la carga del cliente
 
+# Función para obtener campañas usando access token y client_id
+def get_campaigns(client_customer_id, access_token):
+    try:
+        # Cargar Google Ads Client
+        client = _ads_client()
 
-     for row in response:
-    print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
+        # Obtener el servicio de Google Ads
+        ga_service = client.get_service("GoogleAdsService")
 
+        # Consulta de ejemplo para obtener las campañas
+        query = """
+            SELECT campaign.id, campaign.name 
+            FROM campaign 
+            WHERE segments.date DURING LAST_30_DAYS
+            ORDER BY campaign.id
+        """
+        
+        # Ejecutar la consulta
+        response = ga_service.search(customer_id=client_customer_id, query=query)
 
-# Usa el access token y client_id
-get_campaigns("7603762609", access_token)
+        # Procesar la respuesta y mostrar los resultados
+        for row in response:
+            print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
+    
+    except Exception as e:
+        print(f"Error al obtener campañas: {e}")
+
+# Llamada a la función get_campaigns con tu client_id y access_token
+get_campaigns("7603762609", "tu_access_token_aqui")
