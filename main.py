@@ -6,6 +6,9 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 import requests
 import json
+import os
+from fastapi import FastAPI, HTTPException, Request
+from google_auth_oauthlib.flow import Flow
 
 app = FastAPI()
 
@@ -116,4 +119,49 @@ def obtener_datos_ads():
 
     except Exception as e:
         return {"error": str(e)}
+SCOPES = ["https://www.googleapis.com/auth/adwords"]
 
+def build_flow(state: str | None = None):
+    client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
+    client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
+    redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+    cfg = {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }
+    }
+    return Flow.from_client_config(cfg, scopes=SCOPES, state=state)
+
+@app.get("/auth_ads")
+def auth_ads():
+    flow = build_flow()
+    flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+    # offline + prompt=consent => asegura que Google emita refresh_token
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    # opcional: podrías guardar `state` en memoria si quieres validarlo luego
+    return {"auth_url": auth_url, "state": state}
+
+@app.get("/callback_ads")
+def callback_ads(request: Request, code: str, state: str | None = None):
+    try:
+        flow = build_flow(state)
+        flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        # Esto es lo que necesitamos:
+        return {
+            "message": "✅ Copia este refresh_token y pégalo en google-ads.yaml",
+            "refresh_token": creds.refresh_token,
+            # (opcional) te dejo también algunos campos útiles:
+            "scopes": list(creds.scopes or []),
+        }
+    except Exception as e:
+        raise HTTPException(400, f"No se pudo completar OAuth: {e}")
