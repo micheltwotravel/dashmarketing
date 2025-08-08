@@ -168,39 +168,8 @@ def verify_refresh_token():
         print(f"Error al verificar las credenciales: {e}")
         return None
 
-# Verificar el refresh_token
-@app.get("/ads/verify_token")
-def verify_token():
-    token = verify_refresh_token()
-    if token:
-        return JSONResponse(content={"ok": True, "token": token})
-    else:
-        return JSONResponse(content={"ok": False, "message": "Las credenciales no son válidas."})
 
-# Verificación de Google Ads Client al iniciar
-def test_google_ads_client():
-    try:
-        client = _ads_client()
-        print("Google Ads client loaded successfully")
-    except Exception as e:
-        print(f"Error loading Google Ads client: {e}")
+        print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
 
-test_google_ads_client()  # Prueba la carga del cliente
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-
-def get_valid_credentials():
-    credentials = Credentials.from_authorized_user_file('/path/to/google-ads.yaml')
-
-    if credentials and credentials.expired and credentials.refresh_token:
-        credentials.refresh(Request())  # Renovar el token
-        print("Nuevo access token:", credentials.token)
-        return credentials
-
-    elif credentials and not credentials.expired:
-        print("Token aún válido.")
-        return credentials
-    else:
-        print("No se pudo obtener el token.")
-        return None
+# Usa el access token y client_id
+get_campaigns("7603762609", access_token)
