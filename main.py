@@ -100,14 +100,15 @@ def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
         # Error legible si falta el ID en el yaml
         raise HTTPException(400, "No se encontró client_customer_id/login_customer_id en google-ads.yaml")
     return cid.replace("-", "")
- @app.get("/ads")
+    
+@app.get("/ads")
 def ads_report(start: str = Query(...), end: str = Query(...)):
     try:
         client = _ads_client()
         ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
 
-        # Consulta simplificada: solo recuperamos el ID y el nombre de la campaña
+        # Consulta extremadamente simple (ID de campaña y nombre)
         query = f"""
           SELECT
             campaign.id,
@@ -118,14 +119,14 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         """
 
         rows = []
-        response = ga_service.search_stream(customer_id=cid, query=query)
+        # Usar search en lugar de search_stream para probar la consulta
+        response = ga_service.search(customer_id=cid, query=query)
 
-        for batch in response:
-            for row in batch.results:
-                rows.append({
-                    "campaign_id": row.campaign.id,
-                    "campaign_name": row.campaign.name,
-                })
+        for row in response:
+            rows.append({
+                "campaign_id": row.campaign.id,
+                "campaign_name": row.campaign.name,
+            })
 
         return {"ok": True, "rows": rows}
 
@@ -141,6 +142,7 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         }, 400
     except Exception as e:
         return {"ok": False, "type": type(e).__name__, "message": str(e)}, 500
+
 
 def build_flow(state: str | None = None):
     client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
