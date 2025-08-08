@@ -169,3 +169,13 @@ def callback_ads(request: Request, code: str, state: str | None = None):
         }
     except Exception as e:
         raise HTTPException(400, f"No se pudo completar OAuth: {e}")
+
+@app.get("/ads/health")
+def ads_health():
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+        c = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
