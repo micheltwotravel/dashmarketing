@@ -100,7 +100,6 @@ def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
         # Error legible si falta el ID en el yaml
         raise HTTPException(400, "No se encontró client_customer_id/login_customer_id en google-ads.yaml")
     return cid.replace("-", "")
-
 @app.get("/ads")
 def ads_report(start: str = Query(...), end: str = Query(...)):
     try:
@@ -108,7 +107,7 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
 
-        # Aquí estamos usando `start` y `end`, en lugar de `sd` y `ed`
+        # Consulta a Google Ads
         query = f"""
           SELECT
             segments.date,
@@ -124,17 +123,24 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         """
         
         rows = []
-        for r in ga_service.search(customer_id=cid, query=query):
-            rows.append({
-                "date": r.segments.date,
-                "campaign_id": r.campaign.id,
-                "campaign_name": r.campaign.name,
-                "impressions": r.metrics.impressions,
-                "clicks": r.metrics.clicks,
-                "conversions": r.metrics.conversions,
-                "cost": float(r.metrics.cost_micros) / 1_000_000.0,
-            })
+        # Usar search_stream para manejar grandes volúmenes de datos
+        response = ga_service.search_stream(customer_id=cid, query=query)
+        
+        # Procesar los resultados
+        for batch in response:
+            for row in batch.results:
+                rows.append({
+                    "date": row.segments.date,
+                    "campaign_id": row.campaign.id,
+                    "campaign_name": row.campaign.name,
+                    "impressions": row.metrics.impressions,
+                    "clicks": row.metrics.clicks,
+                    "conversions": row.metrics.conversions,
+                    "cost": float(row.metrics.cost_micros) / 1_000_000.0,
+                })
+        
         return {"ok": True, "rows": rows}
+    
     except GoogleAdsException as ex:
         return {
             "ok": False,
@@ -147,6 +153,7 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         }, 400
     except Exception as e:
         return {"ok": False, "type": type(e).__name__, "message": str(e)}, 500
+
 
 def build_flow(state: str | None = None):
     client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
