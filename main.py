@@ -189,7 +189,9 @@ def test_google_ads_client():
 test_google_ads_client()  # Prueba la carga del cliente
 
 
-        print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
+     for row in response:
+    print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
+
 
 # Usa el access token y client_id
 get_campaigns("7603762609", access_token)
