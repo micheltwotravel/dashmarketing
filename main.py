@@ -77,24 +77,11 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
     
     except Exception as e:
         return {"error": str(e)}
-        
-from fastapi import FastAPI, Query, HTTPException
-from google.ads.googleads.client import GoogleAdsClient
-from google.ads.googleads.errors import GoogleAdsException
-import traceback
-import yaml
-import os
-from google.auth.transport.requests import Request
-from google.auth.credentials import Credentials
-
-app = FastAPI()
-
-# Cargar cliente de Google Ads desde archivo yaml
 def _ads_client() -> GoogleAdsClient:
     return GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
 
 # Función para verificar que las credenciales de Google Ads funcionan correctamente
-@app.get("/ads/health")
+@app.get("/ads/health", response_model=None)
 def ads_health():
     try:
         # Intentar cargar el cliente de Google Ads
@@ -105,14 +92,14 @@ def ads_health():
         customer_id = client.login_customer_id  # Obtener el login_customer_id desde las credenciales
 
         # Si el cliente y el servicio están correctamente configurados, debería llegar hasta aquí sin problemas
-        return {"ok": True, "customer_id": customer_id}
+        return JSONResponse(content={"ok": True, "customer_id": customer_id})
     
     except Exception as e:
         # Devolver el error si no se puede cargar el cliente
-        return {"ok": False, "error": str(e)}
+        return JSONResponse(content={"ok": False, "error": str(e)})
 
 # Endpoint para consultar campañas y métricas en un rango de fechas
-@app.get("/ads")
+@app.get("/ads", response_model=None)
 def ads_report(start: str = Query(...), end: str = Query(...)):
     try:
         client = _ads_client()
@@ -140,10 +127,10 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
                 "campaign_name": row.campaign.name,
             })
 
-        return {"ok": True, "rows": rows}
+        return JSONResponse(content={"ok": True, "rows": rows})
 
     except GoogleAdsException as ex:
-        return {
+        return JSONResponse(content={
             "ok": False,
             "type": "GoogleAdsException",
             "request_id": ex.request_id,
@@ -151,21 +138,21 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
                 {"code": e.error_code.__class__.__name__, "message": e.message}
                 for e in ex.failure.errors
             ],
-        }, 400
+        }, status_code=400)
     except Exception as e:
-        return {"ok": False, "type": type(e).__name__, "message": str(e)}, 500
+        return JSONResponse(content={"ok": False, "type": type(e).__name__, "message": str(e)}, status_code=500)
 
 # Endpoint para hacer ping y verificar la conexión con el servicio de Google Ads
-@app.get("/ads/ping")
+@app.get("/ads/ping", response_model=None)
 def ads_ping():
     try:
         # Intentar cargar el cliente de Google Ads
         client = _ads_client()
         svc = client.get_service("CustomerService")
         res = svc.list_accessible_customers()  # Listar clientes accesibles
-        return {"ok": True, "resource_names": list(res.resource_names)}
+        return JSONResponse(content={"ok": True, "resource_names": list(res.resource_names)})
     except GoogleAdsException as ex:
-        return {
+        return JSONResponse(content={
             "ok": False,
             "type": "GoogleAdsException",
             "request_id": ex.request_id,
@@ -173,82 +160,21 @@ def ads_ping():
                 {"code": e.error_code.__class__.__name__, "message": e.message}
                 for e in ex.failure.errors
             ],
-        }, 400
+        }, status_code=400)
     except Exception as e:
-        return {
+        return JSONResponse(content={
             "ok": False,
             "type": type(e).__name__,
             "message": str(e),
             "trace": traceback.format_exc(),
-        }, 500
+        }, status_code=500)
 
-# Endpoint para realizar la autenticación de OAuth
-def build_flow(state: str | None = None):
-    client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
-    client_secret = os.environ["GOOGLE_OAUTH_CLIENT_SECRET"]
-    redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
-    SCOPES = ["https://www.googleapis.com/auth/adwords"]
-
-    cfg = {
-        "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [redirect_uri],
-        }
-    }
-    return Flow.from_client_config(cfg, scopes=SCOPES, state=state)
-
-# Endpoint para redirigir a la página de Google OAuth
-from fastapi.responses import RedirectResponse
-
-@app.get("/auth_ads")
-def auth_ads():
-    flow = build_flow()
-    flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"].strip()
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
-    # redirige directo a Google
-    return RedirectResponse(auth_url)
-
-# Endpoint para recibir el código de autorización y completar el flujo OAuth
-@app.get("/callback_ads")
-def callback_ads(request: Request, code: str, state: str | None = None):
+# Función de prueba para verificar que Google Ads Client se carga correctamente
+def test_google_ads_client():
     try:
-        flow = build_flow(state)
-        flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"].strip()
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-        return {
-            "message": "✅ Copia este refresh_token y pégalo en google-ads.yaml",
-            "refresh_token": creds.refresh_token,
-            "scopes": list(creds.scopes or []),
-        }
+        client = _ads_client()
+        print("Google Ads client loaded successfully")
     except Exception as e:
-        raise HTTPException(400, f"No se pudo completar OAuth: {e}")
+        print(f"Error loading Google Ads client: {e}")
 
-# Verificar las credenciales de Google Ads
-def verify_credentials():
-    try:
-        # Cargar las credenciales desde el archivo google-ads.yaml
-        client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
-        ga_service = client.get_service("GoogleAdsService")
-        
-        # Realizar una consulta simple
-        query = "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
-        response = ga_service.search(customer_id="7603762609", query=query)  # Asegúrate de usar el client_customer_id correcto
-        
-        # Si la consulta se ejecuta correctamente, la conexión fue exitosa
-        for row in response:
-            print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
-        print("Conexión exitosa a Google Ads")
-
-    except Exception as e:
-        print(f"Error al conectar: {e}")
-
-# Verificar las credenciales
-verify_credentials()
+test_google_ads_client()  # Prueba la carga del cliente
