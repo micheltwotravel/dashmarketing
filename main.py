@@ -113,7 +113,7 @@ def ads_report(
 
     # Cliente + servicio + customer id (desde /etc/secrets/google-ads.yaml)
     client = _ads_client()
-    ga_service = client.get_service("GoogleAdsService", version="v14")
+    ga_service = client.get_service("GoogleAdsService")
     cid = _customer_id_from_yaml()
 
     # GAQL
