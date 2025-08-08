@@ -108,25 +108,35 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
 
-        # Consulta extremadamente simple (ID de campaña y nombre)
+        # Consulta para obtener métricas de campañas
         query = f"""
-          SELECT
+        SELECT
+            segments.date,
             campaign.id,
-            campaign.name
-          FROM campaign
-          WHERE segments.date BETWEEN '{start}' AND '{end}'
-          ORDER BY segments.date, campaign.id
+            campaign.name,
+            metrics.impressions,
+            metrics.clicks,
+            metrics.conversions,
+            metrics.cost_micros
+        FROM campaign
+        WHERE segments.date BETWEEN '{start}' AND '{end}'
+        ORDER BY segments.date, campaign.id
         """
 
         rows = []
-        # Usar search en lugar de search_stream para probar la consulta
-        response = ga_service.search(customer_id=cid, query=query)
+        response = ga_service.search_stream(customer_id=cid, query=query)
 
-        for row in response:
-            rows.append({
-                "campaign_id": row.campaign.id,
-                "campaign_name": row.campaign.name,
-            })
+        for batch in response:
+            for row in batch.results:
+                rows.append({
+                    "date": row.segments.date,
+                    "campaign_id": row.campaign.id,
+                    "campaign_name": row.campaign.name,
+                    "impressions": row.metrics.impressions,
+                    "clicks": row.metrics.clicks,
+                    "conversions": row.metrics.conversions,
+                    "cost": float(row.metrics.cost_micros) / 1_000_000.0,
+                })
 
         return {"ok": True, "rows": rows}
 
