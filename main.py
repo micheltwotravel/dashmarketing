@@ -80,7 +80,6 @@ def exportar_datos(start: str = Query(...), end: str = Query(...)):
         return {"error": str(e)}
 
 
-
 # Ruta para cargar el cliente de Google Ads
 def _ads_client() -> GoogleAdsClient:
     return GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
@@ -167,6 +166,25 @@ def verify_refresh_token():
     except Exception as e:
         print(f"Error al verificar las credenciales: {e}")
         return None
+
+# Verificar el refresh_token
+@app.get("/ads/verify_token")
+def verify_token():
+    token = verify_refresh_token()
+    if token:
+        return JSONResponse(content={"ok": True, "token": token})
+    else:
+        return JSONResponse(content={"ok": False, "message": "Las credenciales no son válidas."})
+
+# Verificación de Google Ads Client al iniciar
+def test_google_ads_client():
+    try:
+        client = _ads_client()
+        print("Google Ads client loaded successfully")
+    except Exception as e:
+        print(f"Error loading Google Ads client: {e}")
+
+test_google_ads_client()  # Prueba la carga del cliente
 
 
         print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
