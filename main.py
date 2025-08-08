@@ -209,7 +209,6 @@ def ads_health():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-
 @app.get("/ads/ping")
 def ads_ping():
     try:
