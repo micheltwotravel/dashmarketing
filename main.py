@@ -92,7 +92,7 @@ def obtener_datos_ads():
 
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "developer-token": "INSERTA_AQUÍ_TU_DEV_TOKEN",
+            "developer-token": "bAkDdDbdaAGfhkMETHmHEA",
             "Content-Type": "application/json"
         }
 
