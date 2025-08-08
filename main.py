@@ -148,12 +148,13 @@ def ads_ping():
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
-# Función para verificar el refresh_token y renovarlo si es necesario
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+
 def verify_refresh_token():
     try:
         credentials = Credentials.from_authorized_user_file('/etc/secrets/google-ads.yaml')
         
-        # Verificar si el access_token está caducado
         if credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
             print("Acceso autorizado con nuevo access_token")
@@ -166,6 +167,7 @@ def verify_refresh_token():
     except Exception as e:
         print(f"Error al verificar las credenciales: {e}")
         return None
+
 
 # Verificar el refresh_token
 @app.get("/ads/verify_token")
