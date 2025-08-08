@@ -136,31 +136,30 @@ def build_flow(state: str | None = None):
     }
     return Flow.from_client_config(cfg, scopes=SCOPES, state=state)
 
+from fastapi.responses import RedirectResponse
+
 @app.get("/auth_ads")
 def auth_ads():
     flow = build_flow()
     flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"].strip()
-    # offline + prompt=consent => asegura que Google emita refresh_token
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-    # opcional: podrías guardar `state` en memoria si quieres validarlo luego
-    return {"auth_url": auth_url, "state": state}
+    # redirige directo a Google (no JSON)
+    return RedirectResponse(auth_url)
 
 @app.get("/callback_ads")
 def callback_ads(request: Request, code: str, state: str | None = None):
     try:
         flow = build_flow(state)
-        flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+        flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"].strip()  # <-- strip aquí también
         flow.fetch_token(code=code)
         creds = flow.credentials
-        # Esto es lo que necesitamos:
         return {
             "message": "✅ Copia este refresh_token y pégalo en google-ads.yaml",
             "refresh_token": creds.refresh_token,
-            # (opcional) te dejo también algunos campos útiles:
             "scopes": list(creds.scopes or []),
         }
     except Exception as e:
