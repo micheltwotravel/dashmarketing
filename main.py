@@ -103,11 +103,12 @@ def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
 
 @app.get("/ads")
 def ads_report(start: str = Query(...), end: str = Query(...)):
-    # ... validación de fechas igual ...
     try:
         client = _ads_client()
-        ga_service = client.get_service("GoogleAdsService")  # sin version hardcode
+        ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
+
+        # Aquí estamos usando `start` y `end`, en lugar de `sd` y `ed`
         query = f"""
           SELECT
             segments.date,
@@ -118,9 +119,10 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
             metrics.conversions,
             metrics.cost_micros
           FROM campaign
-          WHERE segments.date BETWEEN '{sd}' AND '{ed}'
+          WHERE segments.date BETWEEN '{start}' AND '{end}'
           ORDER BY segments.date, campaign.id
         """
+        
         rows = []
         for r in ga_service.search(customer_id=cid, query=query):
             rows.append({
