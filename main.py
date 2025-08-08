@@ -182,3 +182,26 @@ def test_google_ads_client():
         print(f"Error loading Google Ads client: {e}")
 
 test_google_ads_client()  # Prueba la carga del cliente
+
+from google.ads.googleads.client import GoogleAdsClient
+
+def verify_credentials():
+    try:
+        # Cargar las credenciales desde el archivo google-ads.yaml
+        client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+        ga_service = client.get_service("GoogleAdsService")
+        
+        # Realizar una consulta simple
+        query = "SELECT campaign.id, campaign.name FROM campaign LIMIT 10"
+        response = ga_service.search(customer_id="7603762609", query=query)  # Asegúrate de usar el client_customer_id correcto
+        
+        # Si la consulta se ejecuta correctamente, la conexión fue exitosa
+        for row in response:
+            print(f"Campaign ID: {row.campaign.id}, Campaign Name: {row.campaign.name}")
+        print("Conexión exitosa a Google Ads")
+
+    except Exception as e:
+        print(f"Error al conectar: {e}")
+
+# Verificar las credenciales
+verify_credentials()
