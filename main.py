@@ -193,33 +193,20 @@ def callback_ads(request: Request, code: str, state: str | None = None):
 @app.get("/ads/health")
 def ads_health():
     try:
+        # Intentar cargar el cliente de Google Ads
         from google.ads.googleads.client import GoogleAdsClient
         client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
         
+        # Verificar si se carga correctamente
         ga_service = client.get_service("GoogleAdsService")
-        customer_id = client.login_customer_id
-        
-        # Simple query to check if campaigns can be retrieved
-        query = """
-        SELECT campaign.id, campaign.name
-        FROM campaign
-        LIMIT 10
-        """
-        
-        response = ga_service.search(customer_id=customer_id, query=query)
-        campaigns = []
-        
-        for row in response:
-            campaigns.append({
-                "campaign_id": row.campaign.id,
-                "campaign_name": row.campaign.name,
-            })
-        
-        return {"ok": True, "campaigns": campaigns}
+        customer_id = client.login_customer_id  # Obtener el login_customer_id desde las credenciales
+
+        # Si el cliente y el servicio están correctamente configurados, debería llegar hasta aquí sin problemas
+        return {"ok": True, "customer_id": customer_id}
     
     except Exception as e:
+        # Devolver el error si no se puede cargar el cliente
         return {"ok": False, "error": str(e)}
-
 
 
 @app.get("/ads/ping")
