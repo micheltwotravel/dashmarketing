@@ -139,7 +139,7 @@ def build_flow(state: str | None = None):
 @app.get("/auth_ads")
 def auth_ads():
     flow = build_flow()
-    flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"]
+    flow.redirect_uri = os.environ["GOOGLE_OAUTH_REDIRECT_URI"].strip()
     # offline + prompt=consent => asegura que Google emita refresh_token
     auth_url, state = flow.authorization_url(
         access_type="offline",
