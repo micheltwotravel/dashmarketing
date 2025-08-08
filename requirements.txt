@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pandas
-google-analytics-data>=0.19.0
+google-analytics-data==0.18.19
 google-auth==2.27.0
 google-auth-oauthlib
-google-ads
+google-ads==22.0.0
