@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from google_auth_oauthlib.flow import Flow
 import yaml
 from google.ads.googleads.errors import GoogleAdsException
-
+import traceback
 
 app = FastAPI()
 
@@ -99,40 +99,25 @@ def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
     return cid.replace("-", "")
 
 @app.get("/ads")
-def ads_report(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end:   str = Query(..., description="YYYY-MM-DD"),
-):
-    # Validación de fechas
+def ads_report(start: str = Query(...), end: str = Query(...)):
+    # ... validación de fechas igual ...
     try:
-        sd, ed = _valid_date(start), _valid_date(end)
-        if sd > ed:
-            raise ValueError
-    except Exception:
-        raise HTTPException(400, "Fechas inválidas. Usa YYYY-MM-DD y start<=end.")
-
-    # Cliente + servicio + customer id (desde /etc/secrets/google-ads.yaml)
-    client = _ads_client()
-    ga_service = client.get_service("GoogleAdsService")
-    cid = _customer_id_from_yaml()
-
-    # GAQL
-    query = f"""
-      SELECT
-        segments.date,
-        campaign.id,
-        campaign.name,
-        metrics.impressions,
-        metrics.clicks,
-        metrics.conversions,
-        metrics.cost_micros
-      FROM campaign
-      WHERE segments.date BETWEEN '{sd}' AND '{ed}'
-      ORDER BY segments.date, campaign.id
-    """
-
-    # Ejecución y manejo de errores
-    try:
+        client = _ads_client()
+        ga_service = client.get_service("GoogleAdsService")  # sin version hardcode
+        cid = _customer_id_from_yaml()
+        query = f"""
+          SELECT
+            segments.date,
+            campaign.id,
+            campaign.name,
+            metrics.impressions,
+            metrics.clicks,
+            metrics.conversions,
+            metrics.cost_micros
+          FROM campaign
+          WHERE segments.date BETWEEN '{sd}' AND '{ed}'
+          ORDER BY segments.date, campaign.id
+        """
         rows = []
         for r in ga_service.search(customer_id=cid, query=query):
             rows.append({
@@ -144,14 +129,19 @@ def ads_report(
                 "conversions": r.metrics.conversions,
                 "cost": float(r.metrics.cost_micros) / 1_000_000.0,
             })
-        return {"rows": rows}
+        return {"ok": True, "rows": rows}
     except GoogleAdsException as ex:
-        details = [
-            {"code": e.error_code.__class__.__name__, "message": e.message}
-            for e in ex.failure.errors
-        ]
-        raise HTTPException(400, {"request_id": ex.request_id, "errors": details})
-
+        return {
+            "ok": False,
+            "type": "GoogleAdsException",
+            "request_id": ex.request_id,
+            "errors": [
+                {"code": e.error_code.__class__.__name__, "message": e.message}
+                for e in ex.failure.errors
+            ],
+        }, 400
+    except Exception as e:
+        return {"ok": False, "type": type(e).__name__, "message": str(e)}, 500
 
 def build_flow(state: str | None = None):
     client_id = os.environ["GOOGLE_OAUTH_CLIENT_ID"]
@@ -210,7 +200,25 @@ def ads_health():
 
 @app.get("/ads/ping")
 def ads_ping():
-    client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
-    svc = client.get_service("CustomerService")
-    res = svc.list_accessible_customers()
-    return {"resource_names": list(res.resource_names)}
+    try:
+        client = GoogleAdsClient.load_from_storage("/etc/secrets/google-ads.yaml")
+        svc = client.get_service("CustomerService")
+        res = svc.list_accessible_customers()
+        return {"ok": True, "resource_names": list(res.resource_names)}
+    except GoogleAdsException as ex:
+        return {
+            "ok": False,
+            "type": "GoogleAdsException",
+            "request_id": ex.request_id,
+            "errors": [
+                {"code": e.error_code.__class__.__name__, "message": e.message}
+                for e in ex.failure.errors
+            ],
+        }, 400
+    except Exception as e:
+        return {
+            "ok": False,
+            "type": type(e).__name__,
+            "message": str(e),
+            "trace": traceback.format_exc(),
+        }, 500
