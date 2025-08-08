@@ -100,6 +100,7 @@ def _customer_id_from_yaml(path: str = "/etc/secrets/google-ads.yaml") -> str:
         # Error legible si falta el ID en el yaml
         raise HTTPException(400, "No se encontró client_customer_id/login_customer_id en google-ads.yaml")
     return cid.replace("-", "")
+    
 @app.get("/ads")
 def ads_report(start: str = Query(...), end: str = Query(...)):
     try:
@@ -107,7 +108,7 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
         ga_service = client.get_service("GoogleAdsService")
         cid = _customer_id_from_yaml()
 
-        # Consulta a Google Ads
+        # La consulta a Google Ads debe estar correctamente configurada
         query = f"""
           SELECT
             segments.date,
@@ -121,26 +122,24 @@ def ads_report(start: str = Query(...), end: str = Query(...)):
           WHERE segments.date BETWEEN '{start}' AND '{end}'
           ORDER BY segments.date, campaign.id
         """
-        
+
         rows = []
-        # Usar search_stream para manejar grandes volúmenes de datos
-        response = ga_service.search_stream(customer_id=cid, query=query)
+        response = ga_service.search(customer_id=cid, query=query)  # Asegúrate de usar `search` aquí
         
         # Procesar los resultados
-        for batch in response:
-            for row in batch.results:
-                rows.append({
-                    "date": row.segments.date,
-                    "campaign_id": row.campaign.id,
-                    "campaign_name": row.campaign.name,
-                    "impressions": row.metrics.impressions,
-                    "clicks": row.metrics.clicks,
-                    "conversions": row.metrics.conversions,
-                    "cost": float(row.metrics.cost_micros) / 1_000_000.0,
-                })
+        for row in response:
+            rows.append({
+                "date": row.segments.date,
+                "campaign_id": row.campaign.id,
+                "campaign_name": row.campaign.name,
+                "impressions": row.metrics.impressions,
+                "clicks": row.metrics.clicks,
+                "conversions": row.metrics.conversions,
+                "cost": float(row.metrics.cost_micros) / 1_000_000.0,
+            })
         
         return {"ok": True, "rows": rows}
-    
+
     except GoogleAdsException as ex:
         return {
             "ok": False,
@@ -209,6 +208,7 @@ def ads_health():
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 @app.get("/ads/ping")
 def ads_ping():
