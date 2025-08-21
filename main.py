@@ -3,7 +3,7 @@ import json
 import time
 import logging
 import datetime as dt
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("dashmarketing")
 
-app = FastAPI(title="Dash Marketing API", version="1.0.0")
+app = FastAPI(title="Dash Marketing API", version="1.1.0")
 
 # CORS (ajusta origins si necesitas restringir)
 app.add_middleware(
@@ -42,7 +42,7 @@ app.add_middleware(
 # Variables de entorno / Defaults
 PROPERTY_ID = os.getenv("GA4_PROPERTY_ID", "279889272")
 CREDENTIALS_FILE = os.getenv("GA4_CREDENTIALS_FILE", "/etc/secrets/ga4-credentials.json")
-MIN_START_DATE = dt.date(2024, 1, 1)  # Límite inferior: 2024-01-01
+MIN_START_DATE = dt.date(2024, 1, 1)  # Límite inferior
 
 # -----------------------------------------------------------------------------
 # Utilidades
@@ -61,7 +61,7 @@ def _parse_date(s: str) -> dt.date:
     except Exception:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {s}. Expected YYYY-MM-DD")
 
-def _clamp_dates(start: str, end: str) -> (str, str):
+def _clamp_dates(start: str, end: str) -> Tuple[str, str]:
     """Recorta el rango a [2024-01-01, hoy-1] y valida."""
     s = max(_parse_date(start), MIN_START_DATE)
     e_req = _parse_date(end)
@@ -116,15 +116,38 @@ def _month_range_iter(start: dt.date, end: dt.date) -> List[dt.date]:
     out = []
     while cur <= end:
         out.append(cur)
-        # sumar 1 mes de manera segura
         year = cur.year + (cur.month // 12)
         month = (cur.month % 12) + 1
         cur = dt.date(year, month, 1)
     return out
 
 def _stable_order() -> List[OrderBy]:
-    """Orden total y estable por todas las dimensiones."""
+    """Orden total y estable por todas las dimensiones (clave para paginar por offset)."""
     return [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=d.name)) for d in _dims()]
+
+def _sum(rows: List[Dict[str, Any]], key: str) -> float:
+    return float(sum((r.get(key) or 0) for r in rows))
+
+def _agg_totals(client: BetaAnalyticsDataClient, start_iso: str, end_iso: str) -> Dict[str, float]:
+    """Consulta GA4 sin dimensiones para obtener totales oficiales del rango."""
+    metric_names = ["sessions", "activeUsers", "screenPageViews", "conversions", "totalRevenue"]
+    req = RunReportRequest(
+        property=f"properties/{PROPERTY_ID}",
+        date_ranges=[DateRange(start_date=start_iso, end_date=end_iso)],
+        dimensions=[],  # SIN dimensiones
+        metrics=[Metric(name=m) for m in metric_names],
+        limit=1,
+    )
+    resp = client.run_report(req)
+    out = {m: 0.0 for m in metric_names}
+    if resp.rows:
+        mv = resp.rows[0].metric_values
+        for i, m in enumerate(metric_names):
+            out[m] = _to_float(mv[i].value) or 0.0
+    return out
+
+def _pct_diff(a: float, b: float) -> float:
+    return 0.0 if (b or 0.0) == 0.0 else (a - b) / b
 
 # -----------------------------------------------------------------------------
 # Endpoints
@@ -150,6 +173,7 @@ def exportar_datos(
 ):
     """
     Exporta datos GA4 entre start y end (recortado a [2024-01-01, hoy-1]) con paginación por offset.
+    Devuelve filas detalladas + bloque de auditoría contra un agregado oficial (sin dimensiones).
     """
     start, end = _clamp_dates(start, end)
     log.info(f"/exportar start={start} end={end} page_size={page_size} max_pages={max_pages}")
@@ -194,13 +218,32 @@ def exportar_datos(
             req.offset += len(batch)
             time.sleep(0.15)
 
+        # --- Auditoría: comparar totales del detalle vs agregado oficial ---
+        totals_detail = {
+            "sessions": _sum(out_rows, "sessions"),
+            "activeUsers": _sum(out_rows, "activeUsers"),
+            "screenPageViews": _sum(out_rows, "screenPageViews"),
+            "conversions": _sum(out_rows, "conversions"),
+            "totalRevenue": _sum(out_rows, "totalRevenue"),
+        }
+        totals_agg = _agg_totals(client, start, end)
+        audit = {
+            "detail_totals": totals_detail,
+            "ga4_aggregate": totals_agg,
+            "diff_pct": {k: _pct_diff(totals_detail.get(k, 0.0), totals_agg.get(k, 0.0)) for k in totals_agg.keys()},
+            "rowCount": total,
+            "pages": pages,
+            "truncated": (pages >= max_pages) or (total is not None and len(out_rows) < total),
+        }
+
         body = {
             "rows": out_rows,
             "rowCount": total if total is not None else len(out_rows),
             "start": start,
             "end": end,
             "pages": pages,
-            "truncated": (pages >= max_pages) or (total is not None and len(out_rows) < total),
+            "truncated": audit["truncated"],
+            "audit": audit,
         }
         return JSONResponse(body, headers={"Cache-Control": "no-store"})
     except FileNotFoundError as e:
@@ -219,6 +262,7 @@ def exportar_mensual(
 ):
     """
     Variante que parte el rango por meses (reduce tamaño de cada respuesta GA4).
+    Devuelve el mismo esquema que /exportar con 'audit'.
     """
     s_iso, e_iso = _clamp_dates(start, end)
     s = _parse_date(s_iso)
@@ -273,6 +317,24 @@ def exportar_mensual(
                 if sleep_ms:
                     time.sleep(sleep_ms / 1000.0)
 
+        # Auditoría mensual (contra el rango global solicitado)
+        totals_detail = {
+            "sessions": _sum(all_rows, "sessions"),
+            "activeUsers": _sum(all_rows, "activeUsers"),
+            "screenPageViews": _sum(all_rows, "screenPageViews"),
+            "conversions": _sum(all_rows, "conversions"),
+            "totalRevenue": _sum(all_rows, "totalRevenue"),
+        }
+        totals_agg = _agg_totals(client, s_iso, e_iso)
+        audit = {
+            "detail_totals": totals_detail,
+            "ga4_aggregate": totals_agg,
+            "diff_pct": {k: _pct_diff(totals_detail.get(k, 0.0), totals_agg.get(k, 0.0)) for k in totals_agg.keys()},
+            "rowCount": len(all_rows),
+            "pages": pages_total,
+            "truncated": False,
+        }
+
         body = {
             "rows": all_rows,
             "rowCount": len(all_rows),
@@ -280,6 +342,7 @@ def exportar_mensual(
             "end": e_iso,
             "pages": pages_total,
             "truncated": False,
+            "audit": audit,
         }
         return JSONResponse(body, headers={"Cache-Control": "no-store"})
     except FileNotFoundError as e:
