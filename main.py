@@ -1,36 +1,31 @@
-import os
-import json
-import time
-import logging
-import datetime as dt
-from typing import List, Dict, Any, Optional, Tuple
+import os, json, time, logging, datetime as dt
+from typing import List, Dict, Any, Optional, Tuple, Iterable
 
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.encoders import jsonable_encoder
 
+import orjson
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
-    RunReportRequest,
-    DateRange,
-    Dimension,
-    Metric,
-    OrderBy,
+    RunReportRequest, DateRange, Dimension, Metric, OrderBy
 )
 
-# -----------------------------------------------------------------------------
-# Configuración básica
-# -----------------------------------------------------------------------------
+# ------------------------------ Config ---------------------------------------
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 log = logging.getLogger("dashmarketing")
 
-app = FastAPI(title="Dash Marketing API", version="1.1.0")
+# Usamos orjson para menos memoria/CPU
+def _dumps(obj) -> bytes:
+    return orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY)
 
-# CORS (ajusta origins si necesitas restringir)
+app = FastAPI(title="Dash Marketing API", version="1.2.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -39,14 +34,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Variables de entorno / Defaults
 PROPERTY_ID = os.getenv("GA4_PROPERTY_ID", "279889272")
 CREDENTIALS_FILE = os.getenv("GA4_CREDENTIALS_FILE", "/etc/secrets/ga4-credentials.json")
-MIN_START_DATE = dt.date(2024, 1, 1)  # Límite inferior
+MIN_START_DATE = dt.date(2024, 1, 1)
 
-# -----------------------------------------------------------------------------
-# Utilidades
-# -----------------------------------------------------------------------------
+# ------------------------------ Utils ----------------------------------------
 def _ga4_client() -> BetaAnalyticsDataClient:
     if not os.path.exists(CREDENTIALS_FILE):
         raise FileNotFoundError(f"GA4 credentials not found at {CREDENTIALS_FILE}")
@@ -62,19 +54,12 @@ def _parse_date(s: str) -> dt.date:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {s}. Expected YYYY-MM-DD")
 
 def _clamp_dates(start: str, end: str) -> Tuple[str, str]:
-    """Recorta el rango a [2024-01-01, hoy-1] y valida."""
     s = max(_parse_date(start), MIN_START_DATE)
     e_req = _parse_date(end)
     e = min(e_req, dt.date.today() - dt.timedelta(days=1))
     if s > e:
         raise HTTPException(status_code=400, detail=f"Invalid range after clamp: {s} > {e}")
     return s.isoformat(), e.isoformat()
-
-def _to_float(s: str) -> Optional[float]:
-    try:
-        return float(s)
-    except Exception:
-        return None
 
 def _dims() -> List[Dimension]:
     return [
@@ -101,17 +86,10 @@ def _mets() -> List[Metric]:
         Metric(name="totalRevenue"),
     ]
 
-def _rows_from_response(resp, dims: List[Dimension], mets: List[Metric]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    for r in resp.rows:
-        item = {dims[i].name: r.dimension_values[i].value for i in range(len(dims))}
-        for j in range(len(mets)):
-            item[mets[j].name] = _to_float(r.metric_values[j].value)
-        rows.append(item)
-    return rows
+def _stable_order() -> List[OrderBy]:
+    return [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=d.name)) for d in _dims()]
 
 def _month_range_iter(start: dt.date, end: dt.date) -> List[dt.date]:
-    """Genera fechas del primer día de mes desde start hasta end."""
     cur = start.replace(day=1)
     out = []
     while cur <= end:
@@ -121,37 +99,35 @@ def _month_range_iter(start: dt.date, end: dt.date) -> List[dt.date]:
         cur = dt.date(year, month, 1)
     return out
 
-def _stable_order() -> List[OrderBy]:
-    """Orden total y estable por todas las dimensiones (clave para paginar por offset)."""
-    return [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=d.name)) for d in _dims()]
-
-def _sum(rows: List[Dict[str, Any]], key: str) -> float:
-    return float(sum((r.get(key) or 0) for r in rows))
-
 def _agg_totals(client: BetaAnalyticsDataClient, start_iso: str, end_iso: str) -> Dict[str, float]:
-    """Consulta GA4 sin dimensiones para obtener totales oficiales del rango."""
-    metric_names = ["sessions", "activeUsers", "screenPageViews", "conversions", "totalRevenue"]
+    names = ["sessions", "activeUsers", "screenPageViews", "conversions", "totalRevenue"]
     req = RunReportRequest(
         property=f"properties/{PROPERTY_ID}",
         date_ranges=[DateRange(start_date=start_iso, end_date=end_iso)],
-        dimensions=[],  # SIN dimensiones
-        metrics=[Metric(name=m) for m in metric_names],
+        dimensions=[],
+        metrics=[Metric(name=m) for m in names],
         limit=1,
     )
     resp = client.run_report(req)
-    out = {m: 0.0 for m in metric_names}
+    out = {m: 0.0 for m in names}
     if resp.rows:
         mv = resp.rows[0].metric_values
-        for i, m in enumerate(metric_names):
-            out[m] = _to_float(mv[i].value) or 0.0
+        for i, m in enumerate(names):
+            out[m] = float(mv[i].value or 0)
     return out
+
+# -------------------------- Streaming helpers --------------------------------
+def _row_to_dict(row, dims: List[Dimension], mets: List[Metric]) -> Dict[str, Any]:
+    d = {dims[i].name: row.dimension_values[i].value for i in range(len(dims))}
+    for j in range(len(mets)):
+        val = row.metric_values[j].value
+        d[mets[j].name] = float(val) if (val is not None and val != "") else None
+    return d
 
 def _pct_diff(a: float, b: float) -> float:
     return 0.0 if (b or 0.0) == 0.0 else (a - b) / b
 
-# -----------------------------------------------------------------------------
-# Endpoints
-# -----------------------------------------------------------------------------
+# ------------------------------ Endpoints ------------------------------------
 @app.get("/", response_class=PlainTextResponse)
 def root() -> str:
     return "Dash Marketing API is up. See /docs for OpenAPI."
@@ -168,128 +144,160 @@ def version():
 def exportar_datos(
     start: str = Query(..., description="YYYY-MM-DD"),
     end: str = Query(..., description="YYYY-MM-DD"),
-    page_size: int = Query(10000, ge=1, le=100000, description="Rows per page (GA4 page size)"),
-    max_pages: int = Query(200, ge=1, le=2000, description="Safety cap to avoid infinite loops"),
+    page_size: int = Query(8000, ge=1000, le=25000, description="Rows per page (tune for memory)"),
+    max_pages: int = Query(200, ge=1, le=2000, description="Safety cap"),
 ):
     """
-    Exporta datos GA4 entre start y end (recortado a [2024-01-01, hoy-1]) con paginación por offset.
-    Devuelve filas detalladas + bloque de auditoría contra un agregado oficial (sin dimensiones).
+    Exporta con streaming para no usar memoria: emite {"rows":[ ... ], meta...}
     """
-    start, end = _clamp_dates(start, end)
-    log.info(f"/exportar start={start} end={end} page_size={page_size} max_pages={max_pages}")
+    s_iso, e_iso = _clamp_dates(start, end)
+    log.info(f"/exportar start={s_iso} end={e_iso} page_size={page_size} max_pages={max_pages}")
 
-    try:
-        client = _ga4_client()
-        dims = _dims()
-        mets = _mets()
+    client = _ga4_client()
+    dims = _dims()
+    mets = _mets()
 
-        req = RunReportRequest(
-            property=f"properties/{PROPERTY_ID}",
-            date_ranges=[DateRange(start_date=start, end_date=end)],
-            dimensions=dims,
-            metrics=mets,
-            order_bys=_stable_order(),
-            limit=page_size,
-            offset=0,
-        )
+    req = RunReportRequest(
+        property=f"properties/{PROPERTY_ID}",
+        date_ranges=[DateRange(start_date=s_iso, end_date=e_iso)],
+        dimensions=dims,
+        metrics=mets,
+        order_bys=_stable_order(),
+        limit=page_size,
+        offset=0,
+    )
 
-        out_rows: List[Dict[str, Any]] = []
-        pages = 0
-        total: Optional[int] = None
+    # acumuladores para audit (sin guardar filas)
+    pages = 0
+    total_rows_reported: Optional[int] = None
+    sum_sessions = 0.0
+    sum_users = 0.0
+    sum_views = 0.0
+    sum_conv = 0.0
+    sum_rev = 0.0
 
+    def _gen() -> Iterable[bytes]:
+        nonlocal pages, total_rows_reported, sum_sessions, sum_users, sum_views, sum_conv, sum_rev
+
+        # encabezado del objeto JSON
+        yield b'{"rows":['
+        first = True
         while True:
             resp = client.run_report(req)
-            if total is None:
-                total = getattr(resp, "row_count", None)
+            if total_rows_reported is None:
+                total_rows_reported = getattr(resp, "row_count", None)
+            batch_count = 0
 
-            batch = _rows_from_response(resp, dims, mets)
-            if not batch:
+            for r in resp.rows:
+                d = _row_to_dict(r, dims, mets)
+                # acumular métricas para audit
+                sum_sessions += d.get("sessions") or 0
+                sum_users    += d.get("activeUsers") or 0
+                sum_views    += d.get("screenPageViews") or 0
+                sum_conv     += d.get("conversions") or 0
+                sum_rev      += d.get("totalRevenue") or 0
+
+                if not first:
+                    yield b","
+                else:
+                    first = False
+                yield _dumps(d)
+                batch_count += 1
+
+            if batch_count == 0:
                 break
 
-            out_rows.extend(batch)
             pages += 1
-
-            if total is not None and len(out_rows) >= total:
+            if total_rows_reported is not None and req.offset + batch_count >= total_rows_reported:
+                req.offset += batch_count
                 break
             if pages >= max_pages:
-                log.warning("Reached max_pages cap; response may be truncated.")
+                log.warning("Reached max_pages cap; streaming will end early.")
+                req.offset += batch_count
                 break
 
-            req.offset += len(batch)
-            time.sleep(0.15)
+            req.offset += batch_count
+            time.sleep(0.12)
 
-        # --- Auditoría: comparar totales del detalle vs agregado oficial ---
-        totals_detail = {
-            "sessions": _sum(out_rows, "sessions"),
-            "activeUsers": _sum(out_rows, "activeUsers"),
-            "screenPageViews": _sum(out_rows, "screenPageViews"),
-            "conversions": _sum(out_rows, "conversions"),
-            "totalRevenue": _sum(out_rows, "totalRevenue"),
-        }
-        totals_agg = _agg_totals(client, start, end)
-        audit = {
-            "detail_totals": totals_detail,
-            "ga4_aggregate": totals_agg,
-            "diff_pct": {k: _pct_diff(totals_detail.get(k, 0.0), totals_agg.get(k, 0.0)) for k in totals_agg.keys()},
-            "rowCount": total,
-            "pages": pages,
-            "truncated": (pages >= max_pages) or (total is not None and len(out_rows) < total),
-        }
+        # cerrar array de rows
+        yield b"],"
 
-        body = {
-            "rows": out_rows,
-            "rowCount": total if total is not None else len(out_rows),
-            "start": start,
-            "end": end,
-            "pages": pages,
-            "truncated": audit["truncated"],
-            "audit": audit,
+        # auditoría: consultar totales agregados oficiales
+        agg = _agg_totals(client, s_iso, e_iso)
+        diff = {
+            "sessions": _pct_diff(sum_sessions, agg.get("sessions", 0.0)),
+            "activeUsers": _pct_diff(sum_users, agg.get("activeUsers", 0.0)),
+            "screenPageViews": _pct_diff(sum_views, agg.get("screenPageViews", 0.0)),
+            "conversions": _pct_diff(sum_conv, agg.get("conversions", 0.0)),
+            "totalRevenue": _pct_diff(sum_rev, agg.get("totalRevenue", 0.0)),
         }
-        return JSONResponse(body, headers={"Cache-Control": "no-store"})
-    except FileNotFoundError as e:
-        log.exception("Credentials file not found.")
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        log.exception("GA4 export failed.")
-        raise HTTPException(status_code=500, detail=f"GA4 export failed: {e}")
+        body_tail = {
+            "rowCount": total_rows_reported,
+            "start": s_iso,
+            "end": e_iso,
+            "pages": pages,
+            "truncated": (pages >= max_pages) or (
+                total_rows_reported is not None and req.offset < total_rows_reported
+            ),
+            "audit": {
+                "detail_totals": {
+                    "sessions": sum_sessions,
+                    "activeUsers": sum_users,
+                    "screenPageViews": sum_views,
+                    "conversions": sum_conv,
+                    "totalRevenue": sum_rev,
+                },
+                "ga4_aggregate": agg,
+                "diff_pct": diff,
+                "rowCount": total_rows_reported,
+                "pages": pages,
+                "truncated": (pages >= max_pages) or (
+                    total_rows_reported is not None and req.offset < total_rows_reported
+                ),
+            },
+        }
+        yield _dumps(body_tail)
+        yield b"}"
+
+    return StreamingResponse(_gen(), media_type="application/json")
 
 @app.get("/exportar_mensual")
 def exportar_mensual(
     start: str = Query(..., description="YYYY-MM-DD"),
     end: str = Query(..., description="YYYY-MM-DD"),
-    page_size: int = Query(25000, ge=1, le=100000),
-    sleep_ms: int = Query(150, ge=0, le=2000, description="Backoff entre llamadas (ms)"),
+    page_size: int = Query(8000, ge=1000, le=25000),
+    sleep_ms: int = Query(120, ge=0, le=2000, description="Backoff ms"),
 ):
     """
-    Variante que parte el rango por meses (reduce tamaño de cada respuesta GA4).
-    Devuelve el mismo esquema que /exportar con 'audit'.
+    Streaming por meses para rangos grandes. No acumula filas en memoria.
     """
     s_iso, e_iso = _clamp_dates(start, end)
     s = _parse_date(s_iso)
     e = _parse_date(e_iso)
     log.info(f"/exportar_mensual start={s_iso} end={e_iso} page_size={page_size}")
 
-    try:
-        client = _ga4_client()
-        dims = _dims()
-        mets = _mets()
+    client = _ga4_client()
+    dims = _dims()
+    mets = _mets()
 
-        all_rows: List[Dict[str, Any]] = []
-        pages_total = 0
-        months = _month_range_iter(s, e)
+    pages_total = 0
+    sum_sessions = sum_users = sum_views = sum_conv = sum_rev = 0.0
+
+    months = _month_range_iter(s, e)
+
+    def _gen() -> Iterable[bytes]:
+        nonlocal pages_total, sum_sessions, sum_users, sum_views, sum_conv, sum_rev
+        yield b'{"rows":['
+        first_row = True
 
         for m0 in months:
             m_start = m0
-            next_month_year = m0.year + (m0.month // 12)
-            next_month = (m0.month % 12) + 1
-            m_end = (dt.date(next_month_year, next_month, 1) - dt.timedelta(days=1))
-
-            if m_end > e:
-                m_end = e
-            if m_start < s:
-                m_start = s
-            if m_start > m_end:
-                continue
+            y2 = m0.year + (m0.month // 12)
+            m2 = (m0.month % 12) + 1
+            m_end = (dt.date(y2, m2, 1) - dt.timedelta(days=1))
+            if m_end > e: m_end = e
+            if m_start < s: m_start = s
+            if m_start > m_end: continue
 
             req = RunReportRequest(
                 property=f"properties/{PROPERTY_ID}",
@@ -303,73 +311,85 @@ def exportar_mensual(
 
             while True:
                 resp = client.run_report(req)
-                batch = _rows_from_response(resp, dims, mets)
-                if not batch:
+                batch_count = 0
+                for r in resp.rows:
+                    d = _row_to_dict(r, dims, mets)
+
+                    sum_sessions += d.get("sessions") or 0
+                    sum_users    += d.get("activeUsers") or 0
+                    sum_views    += d.get("screenPageViews") or 0
+                    sum_conv     += d.get("conversions") or 0
+                    sum_rev      += d.get("totalRevenue") or 0
+
+                    if not first_row:
+                        yield b","
+                    else:
+                        first_row = False
+                    yield _dumps(d)
+                    batch_count += 1
+
+                if batch_count == 0:
                     break
-                all_rows.extend(batch)
                 pages_total += 1
 
                 total_month = getattr(resp, "row_count", None)
-                if total_month is not None and len(batch) < page_size and req.offset + len(batch) >= total_month:
+                if total_month is not None and req.offset + batch_count >= total_month:
+                    req.offset += batch_count
                     break
 
-                req.offset += len(batch)
+                req.offset += batch_count
                 if sleep_ms:
                     time.sleep(sleep_ms / 1000.0)
 
-        # Auditoría mensual (contra el rango global solicitado)
-        totals_detail = {
-            "sessions": _sum(all_rows, "sessions"),
-            "activeUsers": _sum(all_rows, "activeUsers"),
-            "screenPageViews": _sum(all_rows, "screenPageViews"),
-            "conversions": _sum(all_rows, "conversions"),
-            "totalRevenue": _sum(all_rows, "totalRevenue"),
-        }
-        totals_agg = _agg_totals(client, s_iso, e_iso)
-        audit = {
-            "detail_totals": totals_detail,
-            "ga4_aggregate": totals_agg,
-            "diff_pct": {k: _pct_diff(totals_detail.get(k, 0.0), totals_agg.get(k, 0.0)) for k in totals_agg.keys()},
-            "rowCount": len(all_rows),
-            "pages": pages_total,
-            "truncated": False,
-        }
+        yield b"],"
 
-        body = {
-            "rows": all_rows,
-            "rowCount": len(all_rows),
+        agg = _agg_totals(client, s_iso, e_iso)
+        diff = {
+            "sessions": _pct_diff(sum_sessions, agg.get("sessions", 0.0)),
+            "activeUsers": _pct_diff(sum_users, agg.get("activeUsers", 0.0)),
+            "screenPageViews": _pct_diff(sum_views, agg.get("screenPageViews", 0.0)),
+            "conversions": _pct_diff(sum_conv, agg.get("conversions", 0.0)),
+            "totalRevenue": _pct_diff(sum_rev, agg.get("totalRevenue", 0.0)),
+        }
+        tail = {
+            "rowCount": None,   # desconocido sin acumular; Power BI no lo necesita
             "start": s_iso,
             "end": e_iso,
             "pages": pages_total,
             "truncated": False,
-            "audit": audit,
+            "audit": {
+                "detail_totals": {
+                    "sessions": sum_sessions,
+                    "activeUsers": sum_users,
+                    "screenPageViews": sum_views,
+                    "conversions": sum_conv,
+                    "totalRevenue": sum_rev,
+                },
+                "ga4_aggregate": agg,
+                "diff_pct": diff,
+                "rowCount": None,
+                "pages": pages_total,
+                "truncated": False,
+            },
         }
-        return JSONResponse(body, headers={"Cache-Control": "no-store"})
-    except FileNotFoundError as e:
-        log.exception("Credentials file not found.")
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        log.exception("GA4 monthly export failed.")
-        raise HTTPException(status_code=500, detail=f"GA4 monthly export failed: {e}")
+        yield _dumps(tail)
+        yield b"}"
 
-# -----------------------------------------------------------------------------
-# Error handlers
-# -----------------------------------------------------------------------------
+    return StreamingResponse(_gen(), media_type="application/json")
+
+# ------------------------------ Error handlers --------------------------------
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_: Request, exc: Exception):
     log.exception("Unhandled error")
-    return JSONResponse(status_code=500, content={"error": str(exc)})
+    return PlainTextResponse(str(exc), status_code=500)
 
-# -----------------------------------------------------------------------------
-# Entry point (local)
-# -----------------------------------------------------------------------------
+# ------------------------------ Entrypoint ------------------------------------
 if __name__ == "__main__":
     import uvicorn
-
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     log.info(f"Starting server on {host}:{port}")
