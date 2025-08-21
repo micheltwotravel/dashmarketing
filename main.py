@@ -1,4 +1,3 @@
-# main.py
 import os
 import json
 import time
@@ -123,6 +122,10 @@ def _month_range_iter(start: dt.date, end: dt.date) -> List[dt.date]:
         cur = dt.date(year, month, 1)
     return out
 
+def _stable_order() -> List[OrderBy]:
+    """Orden total y estable por todas las dimensiones."""
+    return [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=d.name)) for d in _dims()]
+
 # -----------------------------------------------------------------------------
 # Endpoints
 # -----------------------------------------------------------------------------
@@ -147,15 +150,6 @@ def exportar_datos(
 ):
     """
     Exporta datos GA4 entre start y end (recortado a [2024-01-01, hoy-1]) con paginación por offset.
-    Devuelve:
-      {
-        "rows": [...],
-        "rowCount": <int>,
-        "start": "YYYY-MM-DD",
-        "end": "YYYY-MM-DD",
-        "pages": <int>,
-        "truncated": <bool>
-      }
     """
     start, end = _clamp_dates(start, end)
     log.info(f"/exportar start={start} end={end} page_size={page_size} max_pages={max_pages}")
@@ -170,7 +164,7 @@ def exportar_datos(
             date_ranges=[DateRange(start_date=start, end_date=end)],
             dimensions=dims,
             metrics=mets,
-            order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"))],
+            order_bys=_stable_order(),
             limit=page_size,
             offset=0,
         )
@@ -191,17 +185,13 @@ def exportar_datos(
             out_rows.extend(batch)
             pages += 1
 
-            # corte natural
             if total is not None and len(out_rows) >= total:
                 break
             if pages >= max_pages:
                 log.warning("Reached max_pages cap; response may be truncated.")
                 break
 
-            # avanzar offset
             req.offset += len(batch)
-
-            # backoff suave para no golpear cuotas
             time.sleep(0.15)
 
         body = {
@@ -229,7 +219,6 @@ def exportar_mensual(
 ):
     """
     Variante que parte el rango por meses (reduce tamaño de cada respuesta GA4).
-    Retorna mismo esquema que /exportar pero con 'buckets' mensuales.
     """
     s_iso, e_iso = _clamp_dates(start, end)
     s = _parse_date(s_iso)
@@ -247,12 +236,10 @@ def exportar_mensual(
 
         for m0 in months:
             m_start = m0
-            # último día del mes
             next_month_year = m0.year + (m0.month // 12)
             next_month = (m0.month % 12) + 1
             m_end = (dt.date(next_month_year, next_month, 1) - dt.timedelta(days=1))
 
-            # recorta a end global
             if m_end > e:
                 m_end = e
             if m_start < s:
@@ -265,7 +252,7 @@ def exportar_mensual(
                 date_ranges=[DateRange(start_date=m_start.isoformat(), end_date=m_end.isoformat())],
                 dimensions=dims,
                 metrics=mets,
-                order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"))],
+                order_bys=_stable_order(),
                 limit=page_size,
                 offset=0,
             )
@@ -278,7 +265,6 @@ def exportar_mensual(
                 all_rows.extend(batch)
                 pages_total += 1
 
-                # cortar si ya llegamos al total esperado de ese mes
                 total_month = getattr(resp, "row_count", None)
                 if total_month is not None and len(batch) < page_size and req.offset + len(batch) >= total_month:
                     break
