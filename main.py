@@ -4,9 +4,7 @@ from typing import List, Dict, Any, Optional, Tuple, Iterable
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
-from fastapi.encoders import jsonable_encoder
 
-import orjson
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
@@ -20,11 +18,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("dashmarketing")
 
-# Usamos orjson para menos memoria/CPU
 def _dumps(obj) -> bytes:
-    return orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY)
+    """Serializa a JSON (bytes) sin orjson."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-app = FastAPI(title="Dash Marketing API", version="1.2.0")
+app = FastAPI(title="Dash Marketing API", version="1.2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,7 +111,8 @@ def _agg_totals(client: BetaAnalyticsDataClient, start_iso: str, end_iso: str) -
     if resp.rows:
         mv = resp.rows[0].metric_values
         for i, m in enumerate(names):
-            out[m] = float(mv[i].value or 0)
+            val = mv[i].value
+            out[m] = float(val) if (val is not None and val != "") else 0.0
     return out
 
 # -------------------------- Streaming helpers --------------------------------
@@ -167,19 +166,12 @@ def exportar_datos(
         offset=0,
     )
 
-    # acumuladores para audit (sin guardar filas)
     pages = 0
     total_rows_reported: Optional[int] = None
-    sum_sessions = 0.0
-    sum_users = 0.0
-    sum_views = 0.0
-    sum_conv = 0.0
-    sum_rev = 0.0
+    sum_sessions = sum_users = sum_views = sum_conv = sum_rev = 0.0
 
     def _gen() -> Iterable[bytes]:
         nonlocal pages, total_rows_reported, sum_sessions, sum_users, sum_views, sum_conv, sum_rev
-
-        # encabezado del objeto JSON
         yield b'{"rows":['
         first = True
         while True:
@@ -190,12 +182,11 @@ def exportar_datos(
 
             for r in resp.rows:
                 d = _row_to_dict(r, dims, mets)
-                # acumular métricas para audit
-                sum_sessions += d.get("sessions") or 0
-                sum_users    += d.get("activeUsers") or 0
-                sum_views    += d.get("screenPageViews") or 0
-                sum_conv     += d.get("conversions") or 0
-                sum_rev      += d.get("totalRevenue") or 0
+                sum_sessions += d.get("sessions") or 0.0
+                sum_users    += d.get("activeUsers") or 0.0
+                sum_views    += d.get("screenPageViews") or 0.0
+                sum_conv     += d.get("conversions") or 0.0
+                sum_rev      += d.get("totalRevenue") or 0.0
 
                 if not first:
                     yield b","
@@ -219,10 +210,8 @@ def exportar_datos(
             req.offset += batch_count
             time.sleep(0.12)
 
-        # cerrar array de rows
         yield b"],"
 
-        # auditoría: consultar totales agregados oficiales
         agg = _agg_totals(client, s_iso, e_iso)
         diff = {
             "sessions": _pct_diff(sum_sessions, agg.get("sessions", 0.0)),
@@ -282,7 +271,6 @@ def exportar_mensual(
 
     pages_total = 0
     sum_sessions = sum_users = sum_views = sum_conv = sum_rev = 0.0
-
     months = _month_range_iter(s, e)
 
     def _gen() -> Iterable[bytes]:
@@ -315,11 +303,11 @@ def exportar_mensual(
                 for r in resp.rows:
                     d = _row_to_dict(r, dims, mets)
 
-                    sum_sessions += d.get("sessions") or 0
-                    sum_users    += d.get("activeUsers") or 0
-                    sum_views    += d.get("screenPageViews") or 0
-                    sum_conv     += d.get("conversions") or 0
-                    sum_rev      += d.get("totalRevenue") or 0
+                    sum_sessions += d.get("sessions") or 0.0
+                    sum_users    += d.get("activeUsers") or 0.0
+                    sum_views    += d.get("screenPageViews") or 0.0
+                    sum_conv     += d.get("conversions") or 0.0
+                    sum_rev      += d.get("totalRevenue") or 0.0
 
                     if not first_row:
                         yield b","
@@ -352,7 +340,7 @@ def exportar_mensual(
             "totalRevenue": _pct_diff(sum_rev, agg.get("totalRevenue", 0.0)),
         }
         tail = {
-            "rowCount": None,   # desconocido sin acumular; Power BI no lo necesita
+            "rowCount": None,
             "start": s_iso,
             "end": e_iso,
             "pages": pages_total,
@@ -391,6 +379,6 @@ async def unhandled_exception_handler(_: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", os.getenv("RENDER_PORT", "8000")))
     log.info(f"Starting server on {host}:{port}")
     uvicorn.run("main:app", host=host, port=port, reload=os.getenv("RELOAD", "false").lower() == "true")
